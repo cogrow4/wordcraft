@@ -729,7 +729,14 @@ impl Document {
     /// Split the paragraph at `pos`; returns the start of the new (second) paragraph.
     pub fn split_paragraph(&mut self, pos: &Pos) -> Result<Pos> {
         let i = pos.path.last();
-        let tail = self.para_mut(pos.story, &pos.path)?.split_off(pos.off)?;
+        let mut tail = self.para_mut(pos.story, &pos.path)?.split_off(pos.off)?;
+        // A drop cap belongs to the first letter of the paragraph it was applied to: pressing Enter
+        // in that paragraph leaves the cap on the first half and starts the new paragraph plain,
+        // as Word does (#6788).
+        tail.props.drop_cap = None;
+        tail.props.drop_cap_margin = None;
+        tail.props.drop_cap_distance = None;
+        tail.props.drop_cap_font = None;
         let bl = self.container_mut(pos.story, &pos.path)?;
         bl.insert((i + 1).min(bl.len()), para_block(tail));
         Ok(Pos { story: pos.story, path: pos.path.with_last(i + 1), off: 0 })

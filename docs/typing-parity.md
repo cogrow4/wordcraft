@@ -615,6 +615,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | trivial | Enter in a paragraph whose first letter is a drop cap keeps the cap on the first half and starts the new paragraph as ordinary text, as Word does (#6788); `doc::edit::tests::splitting_a_drop_cap_paragraph_keeps_the_cap_on_the_first_half` |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
 | 2026-11-07 | trivial | Removing an already-empty paragraph preserves the following paragraph properties, mark and inline formatting. Delete, Backspace, selected marks, outline/TOC, DOCX and Undo/Redo have synthetic coverage (Leaf #152); no new Word or native acceptance run. |

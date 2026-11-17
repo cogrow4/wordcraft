@@ -26,6 +26,26 @@ fn paths_between_matches_every_path_filtered() {
     }
 }
 
+/// #6788: a drop cap belongs to the paragraph's first letter. Pressing Enter in that paragraph
+/// keeps the cap on the first half and starts the new paragraph plain, as Word does.
+#[test]
+fn splitting_a_drop_cap_paragraph_keeps_the_cap_on_the_first_half() {
+    let mut d = doc(&["Sugar and spice"]);
+    {
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.drop_cap = Some(3);
+        p.props.drop_cap_font = Some("Times New Roman".into());
+        p.props.drop_cap_distance = Some(4.0);
+    }
+    d.split_paragraph(&Pos::body(0, 5)).unwrap();
+    let first = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let second = d.para(StoryRef::Body, &Path::top(1)).unwrap();
+    assert_eq!(first.props.drop_cap, Some(3), "the first half keeps the cap");
+    assert_eq!(second.props.drop_cap, None, "the new paragraph is ordinary text");
+    assert_eq!(second.props.drop_cap_font, None);
+    assert_eq!(second.props.drop_cap_distance, None);
+}
+
 #[test]
 fn split_and_join() {
     let mut d = doc(&["Hello world"]);
