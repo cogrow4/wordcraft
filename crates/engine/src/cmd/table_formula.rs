@@ -75,29 +75,25 @@ pub fn evaluate_field_with(
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
     let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
+    // The result's separators follow the cell's language (`w:lang`), with or without a `\#`
+    // picture: a German cell shows `1.236,75`, as Word does (#6872).
+    let out_lang = doc
+        .and_then(|d| {
+            t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|cl| {
+                cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
+            })
+        })
+        .or_else(|| {
+            doc.and_then(|d| {
+                t.rows.iter().flat_map(|row| row.cells.iter()).take(100).find_map(|cl| {
+                    cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
+                })
+            })
+        })
+        .or_else(|| default_lang.map(str::to_string));
     let text = match switch.and_then(picture_of) {
-        Some(picture) => format_picture(value, &picture),
-        None => {
-            let out_lang = doc
-                .and_then(|d| {
-                    t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|cl| {
-                        cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
-                    })
-                })
-                .or_else(|| {
-                    doc.and_then(|d| {
-                        t.rows.iter().flat_map(|row| row.cells.iter()).take(100).find_map(|cl| {
-                            cl.blocks
-                                .iter()
-                                .filter_map(|b| b.as_para())
-                                .find(|p| !p.plain_text().trim().is_empty())
-                                .and_then(|p| super::para_lang(d, p))
-                        })
-                    })
-                })
-                .or_else(|| default_lang.map(str::to_string));
-            wordcraft_doc::locale_number::format_number(value, out_lang.as_deref())
-        }
+        Some(picture) => format_picture_in(value, &picture, out_lang.as_deref()),
+        None => wordcraft_doc::locale_number::format_number(value, out_lang.as_deref()),
     };
     Ok(match switch {
         Some(switch) => format_switches(switch, value, text),
@@ -163,11 +159,59 @@ fn picture_of(switch: &str) -> Option<String> {
     (!picture.is_empty()).then_some(picture)
 }
 
+/// [`format_picture_in`] for a picture written with English separators (`,` groups, `.` decimals).
+pub fn format_picture(value: f64, picture: &str) -> String {
+    format_picture_in(value, picture, None)
+}
+
+/// The text of `value` under the numeric picture `picture` written in the separators of language
+/// `lang`, as Word reads a `\#` switch: a German document writes `#.##0,00` and shows `1.236,75`
+/// (#6872). Quoted literal text keeps its characters as they are.
+pub fn format_picture_in(value: f64, picture: &str, lang: Option<&str>) -> String {
+    let (decimal, group) = picture_separators(lang);
+    if (decimal, group) == ('.', ',') {
+        return format_picture_canonical(value, picture);
+    }
+    // Read the picture in the canonical (`,` group, `.` decimal) form and write the result back
+    // in the language's separators.
+    let canonical = remap_separators(picture, (group, decimal), (',', '.'));
+    remap_separators(&format_picture_canonical(value, &canonical), (',', '.'), (group, decimal))
+}
+
+/// The decimal and group separators a numeric picture uses in `lang`: a comma decimal and `.`
+/// groups for the languages that write `1.234,50`, the reverse for those that write `1,234.50`.
+fn picture_separators(lang: Option<&str>) -> (char, char) {
+    match wordcraft_doc::locale_number::decimal_separator(lang) {
+        ',' => (',', '.'),
+        _ => ('.', ','),
+    }
+}
+
+/// `text` with `from`'s two separators replaced by `to`'s, leaving quoted literal text alone
+/// (Word prints a quoted `.` as a `.`, #6332).
+fn remap_separators(text: &str, from: (char, char), to: (char, char)) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quoted = false;
+    for c in text.chars() {
+        if c == '"' {
+            quoted = !quoted;
+            out.push(c);
+        } else if !quoted && c == from.0 {
+            out.push(to.0);
+        } else if !quoted && c == from.1 {
+            out.push(to.1);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// The text of `value` under a numeric picture, as Word's `\#` pictures read: `0` is a digit that
 /// always shows, `#` one that shows when it has a value, `,` groups thousands, `.` marks the
 /// decimals, `%` multiplies by 100, and anything else shows as it is. Sections split by `;` give the
 /// positive, negative and zero forms; with one section a negative value takes a `-` in front.
-pub fn format_picture(value: f64, picture: &str) -> String {
+fn format_picture_canonical(value: f64, picture: &str) -> String {
     let sections: Vec<&str> = picture.split(';').collect();
     let (section, x, minus) = if value < 0.0 && sections.len() >= 2 {
         (sections[1], -value, false)
@@ -1010,6 +1054,24 @@ mod tests {
         assert_eq!(format_picture(0.0, "0.00;-;zero"), "zero");
         assert_eq!(format_picture(7.0, "000"), "007");
         assert_eq!(format_picture(-0.001, "0.00"), "0.00", "a rounded zero has no sign");
+    }
+
+    /// #6872: a numeric picture's separators follow the cell's language, as Word reads them: a
+    /// German field writes `#.##0,00` and shows `1.236,75`. Quoted literal text keeps its own
+    /// characters.
+    #[test]
+    fn a_numeric_picture_follows_the_fields_language() {
+        assert_eq!(format_picture_in(1234.5, "#.##0,00", Some("de-DE")), "1.234,50");
+        assert_eq!(format_picture_in(1234.5, "#,##0.00", Some("en-US")), "1,234.50");
+        assert_eq!(format_picture_in(1234.5, "#,##0.00", None), "1,234.50", "no language reads the English form");
+
+        let t = table(&[&["1234.5"], &[""]]);
+        let shown = |picture: &str| {
+            evaluate_field_with(&t, None, Some("de-DE"), 1, 0, &format!("=A1 \\# \"{picture}\"")).unwrap_or_else(|e| panic!("{picture}: {e}"))
+        };
+        assert_eq!(shown("#.##0,00"), "1.234,50");
+        let plain = evaluate_field_with(&t, None, Some("de-DE"), 1, 0, "=A1").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(plain, "1234,50", "a German field without a picture writes its decimal comma");
     }
 
     #[test]
